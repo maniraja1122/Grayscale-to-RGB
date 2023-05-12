@@ -1,0 +1,90 @@
+import tensorflow as tf
+from tensorflow import keras 
+import numpy as np
+from matplotlib import pyplot as plt
+from sklearn.utils import shuffle
+import random
+from tensorflow.image import ssim
+d_size=128
+train=tf.keras.utils.image_dataset_from_directory("drive/MyDrive/flowers",image_size=(d_size,d_size),labels=None,batch_size=None)
+train = np.stack(list(train))
+g_train=tf.image.rgb_to_grayscale(train)
+g_train = np.stack(list(g_train))
+# Normalizing
+train=train/255
+g_train=g_train/255
+g_train=g_train.reshape(-1,d_size,d_size)
+lrelu=tf.keras.layers.LeakyReLU(alpha=0.2)
+adam=tf.keras.optimizers.legacy.Adam(learning_rate=0.001)
+
+def custom_loss(y_true, y_pred):
+    # shape assertion
+    y_true_shape = tf.shape(y_true)
+    y_pred_shape = tf.shape(y_pred)
+    shape_check = tf.debugging.Assert(tf.reduce_all(tf.equal(y_true_shape, y_pred_shape)),
+                                       ["Input tensors must have the same shape"])
+    with tf.control_dependencies([shape_check]):
+        mse_loss = tf.keras.losses.MeanSquaredError()(y_true, y_pred)
+        ssim_loss = 1 - tf.image.ssim(y_true, y_pred, max_val=1.0)
+    alpha=0.9
+    return alpha*mse_loss + (1-alpha)*ssim_loss
+
+
+
+
+def get_Model():
+  vggmodel = keras.applications.vgg16.VGG16(include_top=False, input_shape=(d_size, d_size, 3))
+  for layer in vggmodel.layers:
+    layer.trainable = False
+  input=keras.layers.Input(shape=(d_size, d_size,1))
+  expand = keras.layers.Lambda(lambda x: tf.concat([x]*3, axis=-1))(input)
+  encoder_input = vggmodel(expand)
+  decoder_output = keras.layers.Conv2DTranspose(256, (3,3), activation='relu', padding='same')(encoder_input)
+  decoder_output = keras.layers.Conv2DTranspose(128, (3,3), activation='relu', padding='same')(decoder_output)
+  decoder_output = keras.layers.UpSampling2D((2, 2))(decoder_output)
+  decoder_output = keras.layers.Conv2DTranspose(64, (3,3), activation='relu', padding='same')(decoder_output)
+  decoder_output = keras.layers.UpSampling2D((2, 2))(decoder_output)
+  decoder_output = keras.layers.Conv2DTranspose(32, (3,3), activation='relu', padding='same')(decoder_output)
+  decoder_output = keras.layers.UpSampling2D((2, 2))(decoder_output)
+  decoder_output = keras.layers.Conv2DTranspose(16, (3,3), activation='relu', padding='same')(decoder_output)
+  decoder_output = keras.layers.UpSampling2D((2, 2))(decoder_output)
+  decoder_output = keras.layers.Conv2DTranspose(3, (3, 3), activation=lrelu, padding='same')(decoder_output)
+  output = keras.layers.UpSampling2D((2, 2))(decoder_output)
+  s = keras.layers.Conv2D(32, (5, 5), padding="same", activation=lrelu)(output)
+  center = keras.layers.Conv2D(16, (3, 3), padding="same", activation=lrelu)(s)
+  left = keras.layers.Conv2D(8, (3, 3), padding="same", activation=lrelu)(center)    
+  final = keras.layers.Concatenate()([input, left])
+  f1=keras.layers.Conv2D(16, (3, 3), padding="same", activation=lrelu)(final)
+  f2=keras.layers.Conv2D(8, (3, 3), padding="same", activation=lrelu)(f1)
+  out = keras.layers.Concatenate()([s, f2])
+  o1 = keras.layers.Conv2D(16, (3, 3), padding="same", activation=lrelu)(out)
+  o2 = keras.layers.Conv2D(8, (3, 3), padding="same", activation=lrelu)(o1)
+  o = keras.layers.Conv2D(3, (3, 3), padding="same", activation=lrelu)(o2)
+  output = keras.layers.Dense(3, activation="sigmoid")(o)
+
+  model = keras.models.Model(inputs=input, outputs=output)
+  return model
+
+
+my_callbacks = [
+    tf.keras.callbacks.ModelCheckpoint('drive/MyDrive/test/model',save_best_only=True),
+    tf.keras.callbacks.EarlyStopping(patience=5)
+]
+
+model=keras.models.load_model('drive/MyDrive/test/model', custom_objects={'custom_loss':custom_loss})
+# model.compile(optimizer=adam, loss=custom_loss)
+# model.fit(g_train,train,batch_size=32,epochs=1000,validation_split=0.2,callbacks=my_callbacks)
+out=model.predict(g_train)
+
+for i in range(0,10):
+  index=random.randint(0,600)
+  # Made
+  plt.imshow(out[index])
+  plt.show()
+  # Grayscale
+  plt.imshow(g_train[index], cmap="gray")
+  plt.show()
+  # RGB
+  plt.imshow(train[index])
+  plt.show()
+
